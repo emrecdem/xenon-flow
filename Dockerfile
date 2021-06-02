@@ -6,6 +6,14 @@ RUN apt-get update && \
 	apt-get install -y --no-install-recommends build-essential openjdk-11-jdk python3 python3-dev python3-pip && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
+ENV TZ=Europe/Amsterdam
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+RUN apt-get update && \
+    apt-get install -y apt-transport-https ca-certificates curl software-properties-common && \
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add - && \
+    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable" && \
+    apt-get install -y docker-ce-cli
+
 RUN mkdir /home/xenon
 RUN pip3 install --upgrade pip && \
     pip3 install setuptools && \
@@ -13,23 +21,11 @@ RUN pip3 install --upgrade pip && \
 
 RUN cwltool --version
 
-COPY ./src /app/src
-COPY ./gradle /app/gradle
-COPY ./gradlew /app/
-COPY ./build.gradle /app/
-COPY ./settings.gradle /app/
-COPY ./cwl /app/cwl
+COPY ./build/distributions/xenonflow-v1.0-rc2.tar /app/
 
 WORKDIR /app
-RUN ./gradlew build -x test
-
-COPY ./config/docker-config.yml /app/config/config.yml
-COPY ./config/application.properties /app/config/application.properties
-
-RUN mkdir /running-jobs
-RUN mkdir /output
+RUN tar -xf xenonflow-v1.0-rc2.tar
 
 EXPOSE 8080
 
-WORKDIR /app
-CMD ./gradlew bootRun
+CMD ./bin/xenonflow
