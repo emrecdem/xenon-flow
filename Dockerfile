@@ -26,6 +26,6 @@ COPY ./build/distributions/xenonflow-v1.0-rc2.tar /app/
 WORKDIR /app
 RUN tar -xf xenonflow-v1.0-rc2.tar
 
-EXPOSE 8080
+EXPOSE 9050
 
 CMD ./bin/xenonflow
