@@ -18,7 +18,7 @@ ComputeResources:
         cwlCommand: |
             #!/usr/bin/env bash
 
-            cwltool $@
+            cwltool --custom-net ${DOCKER_NETWORK} $@
         maxTime: 20
         scheduler:
             adaptor: local
