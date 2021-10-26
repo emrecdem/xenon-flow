@@ -33,7 +33,7 @@ default: local
 sourceFileSystem:
    adaptor: file
    location: ${XENONFLOW_FILES}/upload/
-   
+
 targetFileSystem:
    adaptor: file
    location: ${XENONFLOW_FILES}/output/

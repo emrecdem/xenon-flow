@@ -10,7 +10,7 @@ plugins {
     id "com.github.node-gradle.node" version "2.2.2"
 }
 
-version = 'v1.0-rc2'
+version = 'v1.0.1'
 sourceCompatibility = JavaVersion.VERSION_11
 targetCompatibility = JavaVersion.VERSION_11
 
@@ -24,9 +24,8 @@ repositories {
     // Use 'jcenter' for resolving your dependencies.
     // You can declare any Maven/Ivy/file repository here.
     mavenLocal()
+    mavenCentral()
     jcenter() 
-    maven { url "https://raw.github.com/weddini/spring-boot-throttling/mvn-repo/" }
-    maven { url 'https://jitpack.io'}
 }
 
 allprojects {
@@ -119,7 +118,7 @@ test {
 }
 
 jacoco {
-    toolVersion = "0.8.6"
+    toolVersion = "0.8.7"
     reportsDir = file("$buildDir/reports/coverage")
 }
 

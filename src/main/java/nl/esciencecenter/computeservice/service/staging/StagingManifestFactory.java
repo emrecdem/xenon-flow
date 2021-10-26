@@ -37,7 +37,7 @@ import nl.esciencecenter.xenon.filesystems.Path;
 public class StagingManifestFactory {
 	private static Logger logger = LoggerFactory.getLogger(StagingManifestFactory.class);
 	
-	public static StagingManifest createStagingInManifest(Job job, FileSystem cwlFileSystem, FileSystem sourceFileSystem, String cwlCommandScript, Logger jobLogger) throws CwlException, XenonException, JsonParseException, JsonMappingException, IOException, StatePreconditionException, XenonflowException {
+	public static StagingManifest createStagingInManifest(Job job, FileSystem cwlFileSystem, FileSystem sourceFileSystem, String cwlCommandScript, Logger jobLogger, JobService jobService) throws CwlException, XenonException, JsonParseException, JsonMappingException, IOException, StatePreconditionException, XenonflowException {
 		StagingManifest manifest = new StagingManifest(job.getId(), job.getSandboxDirectory());
 
 		WorkflowDescription wfd = CWLUtils.loadLocalWorkflow(job, cwlFileSystem, jobLogger);
@@ -55,7 +55,7 @@ public class StagingManifestFactory {
         manifest.add(new CwlFileStagingObject(wfd.localPath, wfd.workflowBaseName, null));
         addSubWorkflowsToManifest(wfd.workflow, manifest, wfd.workflowBasePath, cwlFileSystem, jobLogger);
 
-        addInputToManifest(job, wfd.workflow, manifest, jobLogger);
+        addInputToManifest(job, wfd.workflow, manifest, jobLogger, jobService);
 
         return manifest;
 	}
@@ -120,35 +120,45 @@ public class StagingManifestFactory {
         }
 	}
 	
-	public static void addInputToManifest(Job job, Workflow workflow, StagingManifest manifest, Logger jobLogger) throws CwlException, JsonParseException, JsonMappingException, IOException, StatePreconditionException, XenonflowException, XenonException {	
+	public static void addInputToManifest(Job job, Workflow workflow, StagingManifest manifest, Logger jobLogger, JobService jobService) throws CwlException, JsonParseException, JsonMappingException, IOException, StatePreconditionException, XenonflowException, XenonException {	
 		// Read in the job order as a hashmap
 		ObjectMapper mapper = new ObjectMapper(new JsonFactory());
-		TypeReference<HashMap<String, Object>> typeRef = new TypeReference<HashMap<String, Object>>() {};
+		TypeReference<WorkflowBinding> typeRef = new TypeReference<WorkflowBinding>() {};
 	
 		if (workflow.getInputs() == null) {
 			throw new CwlException("Error staging files, cannot read the workflow file!\nworkflow: " + workflow);
 		}
 
-		Path remoteJobOrder = null;
-        if (workflow.getInputs().length > 0 && job.hasInput()) {
-        	remoteJobOrder = new Path("job-order.json");
-        	
-        	// Add files and directories from the input to the staging
-        	// manifest and update the input to point to locations
-        	// on the remote server
-        	String jobOrderString = job.getInput().toString();
-        	logger.debug("Old job order string: " + jobOrderString);
-        	
-        	HashMap<String, Object> jobOrder = mapper.readValue(new StringReader(jobOrderString), typeRef);
-        	
+		// Add files and directories from the input to the staging
+    	// manifest and update the input to point to locations
+    	// on the remote server
+		WorkflowBinding jobOrder = null;
+		if(job.hasInput()) {
+			String jobOrderString = job.getInput().toString();
+			logger.debug("Old job order string: " + jobOrderString);
+			jobOrder = mapper.readValue(new StringReader(jobOrderString), typeRef);
+		} else {
+			jobOrder = new WorkflowBinding();
+		}
+        if (workflow.getInputs().length > 0) {
+        	Path remoteJobOrder = new Path("job-order.json");
+
 			jobLogger.debug("Parsing inputs from: " + workflow.toString());
         	for (InputParameter parameter : workflow.getInputs()) {
-    			addParameterToManifest(manifest, jobOrder, parameter);
+        		if (parameter.getId().equals("xenonflow_jobid")) {
+        			jobOrder.put("xenonflow_jobid", job.getId());
+        		} else if (parameter.getId().equals("xenonflow_jobname")) {
+        			jobOrder.put("xenonflow_jobname", job.getName());
+        		} else {
+        			addParameterToManifest(manifest, jobOrder, parameter);
+        		}
         	}
-        
-    		String newJobOrderString = mapper.writeValueAsString(jobOrder);
-    		logger.debug("New job order string: " + newJobOrderString);
-    		manifest.add(new StringToFileStagingObject(newJobOrderString, remoteJobOrder, null));
+    	
+			String newJobOrderString = mapper.writeValueAsString(jobOrder);
+			logger.debug("New job order string: " + newJobOrderString);
+			manifest.add(new StringToFileStagingObject(newJobOrderString, remoteJobOrder, null));
+			
+			jobService.setInput(job.getId(), jobOrder);
         }
 	}
 	
@@ -168,7 +178,7 @@ public class StagingManifestFactory {
 
 	private static void addParameterToManifest(StagingManifest manifest, HashMap<String, Object> map, Parameter parameter) throws CwlException, MalformedURLException, XenonflowException, XenonException {
 		String paramId = null;
-		if (parameter.getId().startsWith("#")) {
+		if (parameter.getId().startsWith("#") && parameter.getId().contains("/")) {
 			// If the parameter name start with # it likely
 			// has the format #main/param_name
 			paramId = parameter.getId().split("/")[1];
@@ -177,13 +187,17 @@ public class StagingManifestFactory {
 		}
 
 		// TODO: Support secondaryFiles
-		if (parameter.getType().equals("File?") || parameter.getType().equals("Directory?")) {
+		if (parameter.isOptional()) {
 			if (map.containsKey(paramId)) {
 				addFileOrDirectoryToManifest(manifest, parameter, map, paramId);
 			}
-		} else if (parameter.getType().equals("File") || parameter.getType().equals("Directory")
-				 || parameter.getType().equals("stdout") || parameter.getType().equals("stderr")) {
-			if (!map.containsKey(paramId)) {
+		} else if (parameter.getType().equals("File")
+				 || parameter.getType().equals("File?")
+				 || parameter.getType().equals("Directory")
+				 || parameter.getType().equals("Directory?")
+				 || parameter.getType().equals("stdout")
+				 || parameter.getType().equals("stderr")) {
+			if (!map.containsKey(paramId) && !parameter.containsKey("default")) {
 				throw new CwlException("Error staging files, cannot find: " + paramId + " in the job order.");
 			} else {
 				addFileOrDirectoryToManifest(manifest, parameter, map, paramId);
@@ -225,15 +239,35 @@ public class StagingManifestFactory {
 		}
 	}
 	
-	private static void addFileToManifest(StagingManifest manifest, Parameter parameter, HashMap<String, Object> map, String paramId) throws MalformedURLException, XenonflowException, XenonException {
-		// This should either work or throw an exception. We can't make this a checked cast
-		// so suppress the warning
-		@SuppressWarnings("unchecked")
-		HashMap<String, Object> file = (HashMap<String, Object>) map.get(paramId);
+	@SuppressWarnings("unchecked")
+	private static void addFileToManifest(StagingManifest manifest, Parameter parameter, HashMap<String, Object> map, String paramId) throws MalformedURLException, XenonflowException, XenonException {		
+		HashMap<String, Object> file = null;
+		if (map.containsKey(paramId)) {
+			// This should either work or throw an exception. We can't make this a checked cast
+			// so suppress the warning
+			file = (HashMap<String, Object>) map.get(paramId);
+			if (file == null) {
+				file = (HashMap<String, Object>) parameter.get("default");
+			}
+		} else {
+			// There should be a default now if it was not in the map
+			file = (HashMap<String, Object>) parameter.get("default");
+		}
+		
+		if (file == null) {
+			// We did not find any suitable value for this file.
+			if (parameter.isOptional()) {
+				// But it's an optional file, so skip it.
+				return;
+			} else {
+				// We bail out here as we do not support this particular case
+				throw new XenonflowException("Could not find a file to stage for parameter: " + paramId);
+			}
+		}
 		
 		Path sourcePath = null;
 		Path targetPath = null;
-		if (!file.containsKey("path") && !file.containsKey("location") && file.containsKey("content")) {
+		if (!file.containsKey("path") && !file.containsKey("location") && file.containsKey("contents")) {
 			
 			if (file.containsKey("basename")) {
 				targetPath = new Path((String)file.get("basename"));
@@ -241,12 +275,21 @@ public class StagingManifestFactory {
 				targetPath = new Path(paramId);
 			}
 			
-			manifest.add(new StringToFileStagingObject((String) file.get("content"), targetPath, parameter));
+			manifest.add(new StringToFileStagingObject((String) file.get("contents"), targetPath, parameter));
 		} else {
 			if (file.containsKey("path")) {
 				sourcePath = new Path((String) file.get("path"));
-			} else if (file.containsKey("location") && CWLUtils.isLocalPath((String)file.get("location"))) {
-				sourcePath = CWLUtils.getLocalPath((String)file.get("location"));
+			} else if (file.containsKey("location")) {
+				String location = (String)file.get("location");
+				if (CWLUtils.isPathNotLocation(location)) {
+					// it is a path but set in location
+					sourcePath = new Path(location);
+				} else if (CWLUtils.isLocalPath(location)) {
+					// it is an actual local path with file:// in front
+					sourcePath = CWLUtils.getLocalPath(location);
+				}
+			} else if(file.containsKey("basename")) {
+				sourcePath = CWLUtils.getLocalPath((String)file.get("basename"));
 			}
 			targetPath = new Path(sourcePath.getFileNameAsString());
 			manifest.add(new FileStagingObject(sourcePath, targetPath, parameter));
@@ -264,8 +307,17 @@ public class StagingManifestFactory {
 		Path sourcePath = null;
 		if (dir.containsKey("path")) {
 			sourcePath = new Path((String) dir.get("path"));
-		} else if (dir.containsKey("location") && CWLUtils.isLocalPath((String)dir.get("location"))) {
-			sourcePath = CWLUtils.getLocalPath((String)dir.get("location"));
+		} else if (dir.containsKey("location")) {
+			String location = (String)dir.get("location");
+			if (CWLUtils.isPathNotLocation(location)) {
+				// it is a path but set in location
+				sourcePath = new Path(location);
+			} else if (CWLUtils.isLocalPath(location)) {
+				// it is an actual local path with file:// in front
+				sourcePath = CWLUtils.getLocalPath(location);
+			}
+		} else if(dir.containsKey("basename")) {
+			sourcePath = CWLUtils.getLocalPath((String)dir.get("basename"));
 		}
 
 		Path targetPath = new Path(sourcePath.getFileNameAsString());
