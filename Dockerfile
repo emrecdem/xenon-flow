@@ -21,10 +21,10 @@ RUN pip3 install --upgrade pip && \
 
 RUN cwltool --version
 
-COPY ./build/distributions/xenonflow-v1.0-rc2.tar /app/
+COPY ./build/distributions/xenonflow-v1.0.1.tar /app/
 
 WORKDIR /app
-RUN tar -xf xenonflow-v1.0-rc2.tar
+RUN tar -xf xenonflow-v1.0.1.tar
 
 EXPOSE 9050
 
