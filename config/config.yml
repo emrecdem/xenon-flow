@@ -19,7 +19,7 @@ ComputeResources:
             #!/usr/bin/env bash
 
             cwltool --custom-net ${DOCKER_NETWORK} $@
-        maxTime: 20
+        maxTime: 60
         scheduler:
             adaptor: local
             location: ${XENONFLOW_FILES}/running-jobs/
